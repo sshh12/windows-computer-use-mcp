@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "windows-computer-use-mcp"
+version = "0.1.0"
+description = "Windows computer-use MCP server: native screen capture, input injection, video recording, and play-test automation for full Claude control of a Windows desktop."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "sshh12" }]
+keywords = ["mcp", "computer-use", "windows", "automation", "claude", "screen-capture", "input"]
+dependencies = [
+  "mcp>=1.2.0",
+  "mss>=9.0.0",
+  "pillow>=10.0.0",
+  "uiautomation>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sshh12/windows-computer-use-mcp"
+Repository = "https://github.com/sshh12/windows-computer-use-mcp"
+
+[project.optional-dependencies]
+dev = ["ruff>=0.8", "mypy>=1.13", "pre-commit>=3.5", "types-Pillow"]
+
+[project.scripts]
+windows-computer-use-mcp = "windows_computer_use.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/windows_computer_use"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+# E701/E702: compact one-line dispatch (action -> call; return label) is intentional.
+# B904: re-raising domain errors without `from` is fine here. E741: `l` in tight loops.
+ignore = ["E741", "E701", "E702", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # tests adjust sys.path / encoding before imports
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+ignore_missing_imports = true
+follow_imports = "silent"
+no_implicit_optional = false
+disallow_untyped_defs = false
+check_untyped_defs = false
+warn_unused_ignores = false
+# ctypes value access, pydantic url coercion, and dynamic dict.get() values produce noisy
+# false positives here; keep the high-value checks (undefined names, returns, call args).
+disable_error_code = ["attr-defined", "assignment", "arg-type"]

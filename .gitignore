@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Local research clones / scratch
+.research/
+.claude/
+
+# Machine-specific MCP server config (points at a local venv)
+.mcp.json
+artifacts/
+captures/
+windows-computer-use/
+*.mp4
+/*.png
+/src/**/*.png
+
+# Editor / OS
+.editor.pid
+.DS_Store
+Thumbs.db
