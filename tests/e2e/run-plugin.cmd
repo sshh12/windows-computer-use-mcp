@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-rem Run a `claude -p` headless task against the windows-computer-use PLUGIN (end-to-end plugin test).
+rem Run a claude -p headless task against the windows-computer-use PLUGIN (end-to-end plugin test).
 rem --plugin-dir loads the plugin; its .mcp.json bootstraps a venv and installs the server.
 rem WCU_SOURCE points the bootstrap at the local checkout so we test current code without a GitHub push.
 rem Usage:  run-plugin.cmd "task prompt for the agent"
@@ -18,8 +18,8 @@ set "CLAUDE_CODE_ENTRYPOINT="
 set "WCU_SOURCE=C:\dev\windows-computer-use-mcp"
 set "PLUGIN=C:\dev\claude-plugins\plugins\windows-computer-use"
 
-rem Run from a NEUTRAL temp dir (not the repo) so the project .mcp.json isn't picked up — this
-rem tests the plugin's own bootstrap/pathing, not a hard-coded dev server in the repo folder.
+rem Run from a NEUTRAL temp dir (not the repo) so the project .mcp.json is not picked up - this
+rem tests the plugin's own bootstrap and pathing, not a hard-coded dev server in the repo folder.
 set "RUNDIR=%TEMP%\wcu-plugin-test"
 if not exist "%RUNDIR%" mkdir "%RUNDIR%"
 pushd "%RUNDIR%"
