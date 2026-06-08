@@ -52,6 +52,35 @@ async def main():
     print("\n[record 1s] ->", block_kinds(rec), "image?", has_image(rec))
     print("  ", rec[0].text.splitlines()[0])
 
+    # viewports: screen-anchored crop with exact coordinate assertions (max_dim=0 -> no downscale)
+    disp = S.system("displays")["monitors"][0]
+    ox, oy = disp["origin"]
+    vp_rect = {"left": ox + 100, "top": oy + 100, "width": 400, "height": 300}
+    S.viewports.define_screen_viewport("smoke", vp_rect)
+    await S.screenshot(target="viewport:smoke", max_dim=0)
+    g = S.coords.get_last_capture()
+    assert (g.origin_x, g.origin_y) == (vp_rect["left"], vp_rect["top"]), (g.origin_x, g.origin_y)
+    assert (g.actual_width, g.actual_height) == (400, 300), (g.actual_width, g.actual_height)
+    cx, cy = S.coords.resolve_point(200, 150, "image")  # viewport center -> physical center
+    assert (cx, cy) == (vp_rect["left"] + 200, vp_rect["top"] + 150), (cx, cy)
+    assert any(v["name"] == "smoke" for v in S.viewports.summaries())
+    print("\n[viewport screen] origin", (g.origin_x, g.origin_y), "size",
+          (g.actual_width, g.actual_height), "center->", (cx, cy))
+
+    # viewports: window-anchored crop (center quarter of the foreground window) -> PrintWindow+crop
+    fgw = next((w for w in S.winfind.list_windows() if w["foreground"]), None)
+    if fgw:
+        S.viewports.define_window_viewport("smokewin", fgw["hwnd"], fgw["title"],
+                                           fgw.get("process", ""), (0.25, 0.25, 0.5, 0.5))
+        await S.screenshot(target="viewport:smokewin", max_dim=0)
+        g2 = S.coords.get_last_capture()
+        exp_w = round(0.5 * fgw["rect"]["width"])
+        assert abs(g2.actual_width - exp_w) <= 2, (g2.actual_width, exp_w)
+        print("[viewport window] cropped", (g2.actual_width, g2.actual_height),
+              "of window", (fgw["rect"]["width"], fgw["rect"]["height"]))
+        S.system("clear_viewport", text="smokewin")
+    S.system("clear_viewport", text="smoke")
+
     print("\nALL SMOKE CHECKS PASSED")
 
 

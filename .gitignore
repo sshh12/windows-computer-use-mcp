@@ -17,6 +17,7 @@ venv/
 artifacts/
 captures/
 windows-computer-use/
+.debug/
 *.mp4
 /*.png
 /src/**/*.png

@@ -33,6 +33,18 @@ def grab_fn_for_spec(spec: dict, foreground: bool = True):
             return img
         return grab
 
+    if spec["kind"] == "window_region":
+        hwnd = spec["hwnd"]
+        frac = spec["frac"]
+        if foreground:
+            winfind.foreground(hwnd)
+            time.sleep(0.15)
+
+        def grab_region():
+            crop, _rect, _ok = capture.grab_window_region(hwnd, frac)
+            return crop
+        return grab_region
+
     r = spec["rect"]
 
     def grab_rect():

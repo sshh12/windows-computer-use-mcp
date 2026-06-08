@@ -8,12 +8,15 @@ Grammar (shared by screenshot / record / play):
   "foreground"                  -> the current foreground window
   "<bare title>"                -> treated as window:<bare title>
   "region"                      -> sub-rect given by `region` in `region_space`
+  "viewport:<name>"             -> a previously-defined named viewport (see viewports.py)
 
 Returns one of:
-  {"kind": "rect",   "rect": {left,top,width,height}, "label": str}
-  {"kind": "window", "hwnd": int, "rect": {...}, "label": str}
+  {"kind": "rect",          "rect": {left,top,width,height}, "label": str}
+  {"kind": "window",        "hwnd": int, "rect": {...}, "label": str}
+  {"kind": "window_region", "hwnd": int, "frac": (fx,fy,fw,fh), "process": str, "label": str}
+    (a window-anchored viewport: capture PrintWindow's the window, then crops to the fractions)
 """
-from . import coords, displays, winfind
+from . import coords, displays, viewports, winfind
 
 
 class TargetError(ValueError):
@@ -90,6 +93,9 @@ def resolve(target: str = "desktop", region=None, region_space: str = "image") -
         return {"kind": "rect", "rect": rect, "label": f"desktop ({vb['count']} monitor(s))"}
     if low == "region":
         return _resolve_region(region, region_space)
+    if low.startswith("viewport:"):
+        # the viewport already IS the region; region/region_space are ignored here
+        return viewports.resolve_spec(t.split(":", 1)[1].strip())
     if low == "foreground":
         hwnd = winfind.foreground_window()
         if not hwnd:

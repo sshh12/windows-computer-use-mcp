@@ -111,3 +111,22 @@ def grab_window(hwnd: int) -> tuple[Image.Image, dict, bool]:
         gdi32.DeleteDC(hdc_mem)
         user32.ReleaseDC(hwnd, hdc_win)
     return img, {"left": rect.left, "top": rect.top, "width": w, "height": h}, ok
+
+
+def grab_window_region(hwnd: int, frac: tuple) -> tuple[Image.Image, dict, bool]:
+    """Capture a window (PrintWindow, occluded-safe, no focus theft) then crop to a
+    fractional sub-rect of it. `frac` is (fx, fy, fw, fh) as fractions of the window rect.
+
+    Returns (cropped_image, abs_rect, ok) where abs_rect is the crop's absolute physical
+    screen rect — so the caller can set the click-frame origin from it directly.
+    """
+    img, rect, ok = grab_window(hwnd)
+    iw, ih = img.size
+    fx, fy, fw, fh = frac
+    cx = min(max(int(round(fx * iw)), 0), iw - 1)
+    cy = min(max(int(round(fy * ih)), 0), ih - 1)
+    cw = max(1, min(int(round(fw * iw)), iw - cx))
+    ch = max(1, min(int(round(fh * ih)), ih - cy))
+    crop = img.crop((cx, cy, cx + cw, cy + ch))
+    abs_rect = {"left": rect["left"] + cx, "top": rect["top"] + cy, "width": cw, "height": ch}
+    return crop, abs_rect, ok

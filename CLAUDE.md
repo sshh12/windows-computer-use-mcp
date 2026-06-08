@@ -84,6 +84,15 @@ so everything operates in true physical pixels (a 150%-scaled 4K panel reports 3
   loudly on a stale `capture_id` instead of mis-clicking. **Only `screenshot` sets the click frame —
   `record`/`play` montages deliberately do not.**
 
+- **Viewports** (`viewports.py`, `targets.py`, `capture.grab_window_region`): a named, persistent crop
+  of an app (e.g. a game canvas inside a browser, minus ads/chrome) giving the agent a stable zoomed-in
+  coordinate frame shared by every tool via `target="viewport:<name>"`. Defined with `screenshot
+  define_viewport="game"` (window targets → stored as **fractions of the live window rect**, so it
+  tracks moves/resizes and is DPI-safe; desktop/display → absolute rect). Window-anchored capture is the
+  new `window_region` spec: PrintWindow the window (occluded-safe, no focus theft) then PIL-crop to the
+  fractions; the crop's absolute origin seeds `CaptureGeometry`, so the existing image→physical math maps
+  clicks with zero new logic. Defining sets it as the active `_LAST_TARGET` (so bare `act` inherits it).
+
 - **Foreground discipline** (`winfind.foreground`, `server._capture_target`): re-activating an
   already-front window (SetForegroundWindow/AttachThreadInput) makes apps like Chrome reset their
   internal keyboard focus — so `foreground()` is a **no-op when the window is already frontmost**, and
@@ -105,6 +114,11 @@ so everything operates in true physical pixels (a 150%-scaled 4K panel reports 3
   → `MCP_OUTPUT_DIR` → `~/Pictures/windows-computer-use` → `%TEMP%`. Screenshots inline+downscaled
   (default long edge **1568**; Anthropic downsamples above this); video → mp4 + inline contact-sheet
   montage (`video.py`, `images.contact_sheet`).
+
+- **Debug HTML dump** (`debughtml.py`, off by default): set `WCU_DEBUG_HTML_DIR` and the server
+  writes a per-session `session_<stamp>.html` logging every tool call — args, result text, and
+  inline images — by wrapping each registered `tool.fn` after registration (schema/surface
+  untouched). The dev `.mcp.json` points it at the gitignored `.debug/`.
 
 ## Critical gotchas
 

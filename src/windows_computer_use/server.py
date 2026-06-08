@@ -11,7 +11,7 @@ from mcp import types
 from mcp.server.fastmcp import Context, FastMCP
 from PIL import ImageStat
 
-from . import artifacts, capture, clipboard, coords, images, playscript, targets, video, winfind
+from . import artifacts, capture, clipboard, coords, debughtml, images, playscript, targets, video, viewports, winfind
 from . import process as process_mod
 from . import system as system_mod
 from . import windows as windows_tool
@@ -68,6 +68,20 @@ def _capture_target(target, region, region_space, max_dim, capture_mode, foregro
                 img, warning = alt, "PrintWindow returned black; used on-screen BitBlt fallback"
             else:
                 warning = "capture looks black (fullscreen-exclusive or DRM-protected surface?)"
+    elif spec["kind"] == "window_region":  # a window-anchored viewport: PrintWindow + crop
+        hwnd = spec["hwnd"]
+        if foreground:
+            winfind.foreground(hwnd)
+            time.sleep(0.18)
+        img, rect, ok = capture.grab_window_region(hwnd, spec["frac"])
+        if _looks_black(img) and capture_mode in ("auto", "bitblt"):
+            winfind.foreground(hwnd)
+            time.sleep(0.22)
+            alt = capture.grab_rect(rect["left"], rect["top"], rect["width"], rect["height"])
+            if not _looks_black(alt):
+                img, warning = alt, "PrintWindow returned black; used on-screen BitBlt fallback"
+            else:
+                warning = "viewport capture looks black (window occluded? bring it forward)"
     else:
         rect = spec["rect"]
         img = capture.grab_rect(rect["left"], rect["top"], rect["width"], rect["height"])
@@ -83,22 +97,66 @@ def _capture_target(target, region, region_space, max_dim, capture_mode, foregro
 
 
 # --------------------------------------------------------------------------- screenshot
+def _define_viewport(name: str, target: str, region, region_space: str) -> str | None:
+    """Store a named viewport from (target, region). Returns an optional warning string.
+    Window targets -> fraction-anchored to the window; desktop/display -> screen-anchored rect."""
+    base = targets.resolve(target)
+    warn = None
+    if base["kind"] in ("window", "window_region"):
+        hwnd = base["hwnd"]
+        win = next((w for w in winfind.list_windows() if w["hwnd"] == hwnd), None)
+        if win is None:
+            raise targets.TargetError(f"viewport define: window for {target!r} not found")
+        wrect, title, process = win["rect"], win["title"], win.get("process", "")
+        if region is None:
+            frac = (0.0, 0.0, 1.0, 1.0)
+        else:
+            r = targets._resolve_region(region, region_space)["rect"]
+            gm = coords.get_last_capture()
+            if region_space == "image" and (abs(gm.origin_x - wrect["left"]) > 4
+                                            or abs(gm.origin_y - wrect["top"]) > 4):
+                warn = ("region was given in image space but the last screenshot wasn't this "
+                        "window — screenshot the window first, or pass region_space='screen'")
+            frac = ((r["left"] - wrect["left"]) / wrect["width"],
+                    (r["top"] - wrect["top"]) / wrect["height"],
+                    r["width"] / wrect["width"], r["height"] / wrect["height"])
+        viewports.define_window_viewport(name, hwnd, title, process, frac)
+    else:  # desktop / display -> screen-anchored absolute rect
+        rect = targets._resolve_region(region, region_space)["rect"] if region else base["rect"]
+        viewports.define_screen_viewport(name, rect)
+    return warn
+
+
 @mcp.tool()
 async def screenshot(target: str = "desktop", region: dict | None = None,
                      region_space: str = "image", max_dim: int = 1568,
                      format: str = "png", capture_mode: str = "auto",
                      foreground: bool = False, save: bool = False,
+                     define_viewport: str | None = None,
                      ctx: Context = None) -> list:
     """See the screen as an image. Targets: "desktop" (all monitors), "display:N" or
     "display:primary|left|right", "window:<title|process|hwnd>", a bare window title,
-    "foreground", or "region" (+region {x,y,w,h} in region_space image|screen).
+    "foreground", "region" (+region {x,y,w,h} in region_space image|screen), or
+    "viewport:<name>" (a named crop — see define_viewport below).
 
     Do NOT use this just to read text — use `window` get_text (~10x fewer tokens). This
     sets the coordinate frame for later `act`/`play` clicks; any newer capture invalidates
     earlier image coordinates. Pass format="jpeg" for 3D/game/photo, max_dim=0 for tiny text.
     Window targets are captured in place (PrintWindow) WITHOUT bringing them to the front, so a
     screenshot never steals keyboard focus from a game/canvas; pass foreground=true only if a
-    background window captures black."""
+    background window captures black.
+
+    VIEWPORTS — focus the coordinate system on just the part of an app you care about (e.g. a
+    game's canvas inside a browser, excluding ads/chrome): screenshot the window, then call again
+    with the canvas as `region` plus define_viewport="game". That crops, names, and returns the
+    cropped frame, which becomes the active coordinate space — `act` then clicks/keys inside it
+    automatically, and screenshots stay zoomed-in (sharper clicks, fewer tokens). Re-capture later
+    with target="viewport:game" (record/play accept it too); the viewport tracks the window as it
+    moves/resizes. Manage with `system` action='viewports' / 'clear_viewport'."""
+    vp_warn = None
+    if define_viewport:
+        vp_warn = _define_viewport(define_viewport, target, region, region_space)
+        target, region, region_space = f"viewport:{define_viewport}", None, "image"
     _LAST_TARGET.update(target=target, region=region, region_space=region_space)
     c = _capture_target(target, region, region_space, max_dim, capture_mode, foreground)
     data, mime = images.encode(c["small"], "jpeg" if format == "jpeg" else "png")
@@ -106,6 +164,11 @@ async def screenshot(target: str = "desktop", region: dict | None = None,
     lines = [f"capture #{c['capture_id']} · {c['label']} · rendered {c['small'].size[0]}x"
              f"{c['small'].size[1]} (scale {c['scale']:.3f}; 1 image px ≈ {inv:.2f} screen px) · "
              f"origin ({c['rect']['left']},{c['rect']['top']}) size {c['rect']['width']}x{c['rect']['height']}"]
+    if define_viewport:
+        lines.append(f"✓ viewport '{define_viewport}' defined and now active — act/screenshot/"
+                     f"record/play target=\"viewport:{define_viewport}\" all use this frame")
+    if vp_warn:
+        lines.append(f"⚠ {vp_warn}")
     if c["warning"]:
         lines.append(f"⚠ {c['warning']}")
     out = [_text("\n".join(lines)), _image(data, mime)]
@@ -250,7 +313,9 @@ async def act(actions: list[dict], coordinate_space: str = "image",
     {scroll_direction,scroll_amount}, drag {x,y,to:{x,y},path?}, key {text:"ctrl+s"},
     hold_key {text,duration}, type {text}, paste {text}, mouse_move_relative {dx,dy},
     click_element {query,role?,nth?,window?}, wait {duration}. Coords ([x,y] or {x,y}) are in
-    the last screenshot's image space. Pass focus="<window>" to target a specific window first.
+    the last screenshot's image space — if that was a viewport (a named app-sub-region; see
+    `screenshot` define_viewport), clicks/keys operate inside that cropped frame automatically.
+    Pass focus="<window>" to target a specific window first (this overrides any active viewport).
     key_method routes keyboard input: "auto" (default) sends scan codes to native apps/games but
     auto-switches to window-messages for BROWSER windows (the only thing that reaches a web/canvas/
     Flash game like coolmathgames — left_click the canvas once first to give it focus); force with
@@ -338,7 +403,8 @@ async def record(target: str = "desktop", seconds: float = 5.0, fps: int = 10,
     """Record N seconds of a target and return a single timestamped frame montage (not N
     images) plus an mp4 path — use to judge motion/animation/stutter. For one moment use
     `screenshot`; to drive input while recording use `play`. Window targets are foregrounded
-    first; a 'frames identical' warning means the target wasn't rendering."""
+    first; a 'frames identical' warning means the target wasn't rendering. `target` may be a
+    "viewport:<name>" to record just a defined app-sub-region (e.g. a game canvas)."""
     spec = targets.resolve(target, region, region_space)
     grab = video.grab_fn_for_spec(spec, foreground)
     frames, achieved = video.record(grab, seconds, fps)
@@ -374,20 +440,24 @@ async def play(script: str, target: str | None = None, fps: int = 10,
     scroll <up|down|left|right> <amt> | type <text> | paste <text> | wait <sec> | probe |
     until <expr> | shot. With `probe` set (a shell command emitting JSON), `probe`/`until`
     read telemetry per sample and stop early (e.g. 'until dist < 1000') — the KSP loop.
-    If `target` is a browser window, keys auto-route to the page render-widget so canvas/Flash
-    games (e.g. coolmathgames) receive them; mouse stays absolute."""
+    If `target` is a browser window (or a "viewport:<name>" anchored to one), keys auto-route to
+    the page render-widget so canvas/Flash games (e.g. coolmathgames) receive them; mouse stays
+    absolute. Screenshot the same viewport first so image-space move/click coords match it."""
     try:
         spec = targets.resolve(target or "foreground")
     except Exception:
         spec = targets.resolve("desktop")
     kb_targets = None
-    if spec["kind"] == "window":
+    if spec["kind"] in ("window", "window_region"):
         winfind.foreground(spec["hwnd"])
         time.sleep(0.2)
         # Browser windows: route keys to the page render-widget child so canvas/Flash games
         # actually receive them (SendInput keys miss — the frame, not the widget, holds focus).
-        win = next((w for w in winfind.list_windows() if w["hwnd"] == spec["hwnd"]), None)
-        if win and winfind.is_browser(win.get("process")):
+        proc = spec.get("process")  # window_region carries it; plain window must look it up
+        if proc is None:
+            win = next((w for w in winfind.list_windows() if w["hwnd"] == spec["hwnd"]), None)
+            proc = win.get("process") if win else None
+        if winfind.is_browser(proc):
             kb_targets = winfind.keyboard_targets(spec["hwnd"])
     grab = video.grab_fn_for_spec(spec, foreground=True)
     result = playscript.run(script, grab, fps, probe_cmd=probe,
@@ -494,9 +564,11 @@ async def process(action: str, exe: str | None = None, args: list | None = None,
 # --------------------------------------------------------------------------- system
 @mcp.tool()
 def system(action: str, text: str | None = None) -> dict:
-    """Read environment + clipboard. Actions: displays (monitor layout/DPI/scale — call
-    before reasoning about multi-monitor coords; displays are 0-indexed, "monitor 2" =
-    display:1) ; cursor ; get_clipboard ; set_clipboard {text}."""
+    """Read environment + clipboard, and manage viewports. Actions: displays (monitor
+    layout/DPI/scale — call before reasoning about multi-monitor coords; displays are
+    0-indexed, "monitor 2" = display:1) ; cursor ; get_clipboard ; set_clipboard {text} ;
+    viewports (list named viewports defined via screenshot define_viewport) ;
+    clear_viewport {text:name} (remove one)."""
     if action == "displays":
         return system_mod.displays()
     if action == "cursor":
@@ -505,4 +577,16 @@ def system(action: str, text: str | None = None) -> dict:
         return {"text": clipboard.get_text()}
     if action == "set_clipboard":
         return {"ok": clipboard.set_text(text or "")}
+    if action == "viewports":
+        return {"viewports": viewports.summaries()}
+    if action == "clear_viewport":
+        cleared = viewports.clear(text or "")
+        if cleared and _LAST_TARGET["target"] == f"viewport:{text}":
+            _LAST_TARGET.update(target="desktop", region=None, region_space="image")
+        return {"cleared": cleared}
     return {"error": f"unknown system action {action!r}"}
+
+
+# Arm the optional debug HTML dump (no-op unless WCU_DEBUG_HTML_DIR is set). Must run after all
+# @mcp.tool() definitions so every registered tool gets wrapped.
+debughtml.install(mcp)

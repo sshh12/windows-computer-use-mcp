@@ -32,9 +32,7 @@ do: real multi-monitor capture, per-window GPU capture, game-grade input, and pl
 | **`play`** | Drive a **timed input script** at a cadence while recording (scan codes + relative mouse). `probe`/`until` read telemetry per sample and stop early — the closed loop for play-testing. |
 | **`window`** | Find / focus / close / **read** (`get_text` via UI Automation + OCR) / `click_element` controls with **no screenshot** — token-cheap. |
 | **`process`** | Launch (incl. `shell:true` for URLs / `ms-settings:` / Store apps), kill, wait, run a shell command (real stdout), and wait on readiness (`wait_for_window`, `wait_for_file`). |
-| **`system`** | Monitor layout + DPI/scale, cursor position, and clipboard get/set. |
-
-See [`TOOL_DESIGN.md`](TOOL_DESIGN.md) for the full parameter reference and design rationale.
+| **`system`** | Monitor layout + DPI/scale, cursor position, clipboard get/set, and viewport management. |
 
 ### Coordinates & multi-monitor
 
