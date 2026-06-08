@@ -88,6 +88,14 @@ python -m venv .venv
 `MCP_OUTPUT_DIR` overrides where screenshots/video are written (default: a client root →
 `~/Pictures/windows-computer-use` → `%TEMP%`).
 
+### Debugging
+
+Set `WCU_DEBUG_HTML_DIR` to a directory and the server writes a per-session
+`session_<stamp>.html` that pretty-prints every tool call — arguments, result text, and the
+returned screenshots inline — so you can replay exactly what the agent saw and did:
+
+<img src="https://github.com/user-attachments/assets/4395906b-cfe2-4e25-b560-261a9ebc782d" width="820" alt="Per-session debug HTML dump showing tool calls, arguments, results, and inline screenshots">
+
 ## License
 
 MIT
