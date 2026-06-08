@@ -6,18 +6,10 @@
 
 <p align="center"><em>Claude play-testing a live <strong>Unreal Engine</strong> project — entering Play-In-Editor and running up a ramp, driven entirely through this MCP. The full editor stays on screen, so you can see it really is the desktop app.</em></p>
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that gives a Claude agent
-**full control of the local Windows desktop** — native screen capture, low-level input
-injection, video recording, and a play-test loop for driving games and apps.
+<details>
+<summary><strong>How that clip was made</strong> — one <code>play</code> call</summary>
 
-Unlike Anthropic's sandboxed computer-use tool, this runs **on the machine it controls**: it
-reads the actual current displays (no resolution requests), is **multi-monitor and per-monitor
-DPI aware**, and injects input via `SendInput` **scan codes** so it works in games that ignore
-synthetic virtual-key events. Built for full Claude control — no security gating.
-
----
-
-That clip was produced by a single `play` call — a timed input script run at a cadence while the window is recorded (mouse-look is relative, keys are hardware scan codes, so the game responds). The raw input was exactly:
+A timed input script run at a cadence while the window is recorded (mouse-look is relative, keys are hardware scan codes, so the game responds). The raw input was exactly:
 
 ```python
 play(
@@ -40,6 +32,17 @@ play(
 ```
 
 That is: click the viewport to capture the mouse (`lmb`), turn to face the ramp (`look`, relative pixels), run forward up it (`down w` … `up w`), and jump at the top (`tap space`).
+
+</details>
+
+A [Model Context Protocol](https://modelcontextprotocol.io) server that gives a Claude agent
+**full control of the local Windows desktop** — native screen capture, low-level input
+injection, video recording, and a play-test loop for driving games and apps.
+
+Unlike Anthropic's sandboxed computer-use tool, this runs **on the machine it controls**: it
+reads the actual current displays (no resolution requests), is **multi-monitor and per-monitor
+DPI aware**, and injects input via `SendInput` **scan codes** so it works in games that ignore
+synthetic virtual-key events. Built for full Claude control — no security gating.
 
 ## Why this exists
 
