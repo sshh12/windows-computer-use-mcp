@@ -135,9 +135,10 @@ def _screen_xy(a: dict, space: str, cid):
     return coords.resolve_point(x, y, space, expected_capture_id=cid)
 
 
-def _dispatch(a: dict, space: str, cid) -> str:
+def _dispatch(a: dict, space: str, cid, kb_targets=None, kb_via: str = "scancode") -> str:
     from . import input as winput
     act = (a.get("action") or a.get("type") or "").lower()
+    msg = kb_via == "message" and bool(kb_targets)
     px, py = _screen_xy(a, space, cid)
     mods = a.get("modifiers")
     if act in ("mouse_move", "move"):
@@ -176,12 +177,22 @@ def _dispatch(a: dict, space: str, cid) -> str:
     if act == "mouse_move_relative":
         winput.move_relative(int(a.get("dx", 0)), int(a.get("dy", 0))); return f"mouse_move_relative ({a.get('dx')},{a.get('dy')})"
     if act == "key":
-        winput.press(a.get("text") or a.get("keys")); return f"key {a.get('text') or a.get('keys')}"
+        combo = a.get("text") or a.get("keys")
+        # message-mode: hold the key briefly between down/up — a 0ms press is invisible to games
+        # that only register a key that is down across a frame (the SendInput path is naturally slower).
+        winput.post_combo(kb_targets, combo, hold=0.05) if msg else winput.press(combo)
+        return f"key {combo}" + (" [msg]" if msg else "")
     if act == "hold_key":
-        winput.hold(a.get("text") or a.get("keys"), float(a.get("duration", 1.0))); return f"hold_key {a.get('text')} {a.get('duration')}s"
+        combo = a.get("text") or a.get("keys"); dur = float(a.get("duration", 1.0))
+        winput.post_hold(kb_targets, combo, dur) if msg else winput.hold(combo, dur)
+        return f"hold_key {combo} {dur}s" + (" [msg]" if msg else "")
     if act == "type":
-        winput.type_text(a.get("text", ""), literal=bool(a.get("literal", False))); return f"type {len(a.get('text',''))} chars"
+        text = a.get("text", ""); literal = bool(a.get("literal", False))
+        winput.post_text(kb_targets, text, literal=literal) if msg else winput.type_text(text, literal=literal)
+        return f"type {len(text)} chars" + (" [msg]" if msg else "")
     if act == "paste":
+        # ctrl+v is a modifier chord; posted-message modifiers are unreliable, so paste always
+        # uses SendInput (needs foreground). For a browser field, prefer `type` (WM_CHAR) instead.
         clipboard.set_text(a.get("text", "")); winput.press("ctrl+v"); return f"paste {len(a.get('text',''))} chars"
     if act == "wait":
         time.sleep(float(a.get("duration", 0.5))); return f"wait {a.get('duration')}s"
@@ -200,31 +211,83 @@ def _foreground_title() -> str:
 
 
 _KEYBOARD_ACTIONS = {"type", "key", "hold_key", "paste"}
+# Pointer actions that focus a web canvas. In message-mode, posted keys only reach a browser
+# game if the canvas has DOM focus, and that focus needs a beat to register after the click —
+# so we settle briefly after a click before posting keys batched behind it.
+_POINTER_ACTIONS = {"left_click", "click", "double_click", "triple_click", "left_mouse_down", "mouse_down"}
+
+
+def _resolve_keyboard(focus: str | None, key_method: str):
+    """Decide how keyboard actions are injected. Returns (targets, via, title).
+    - "scancode": SendInput hardware scan codes (foreground+focus required) — native apps, games.
+    - "message":  PostMessage WM_KEY*/WM_CHAR to the target's render-widget child (no focus
+      needed) — the only thing that reaches a browser web/canvas/Flash game, where the top-level
+      frame holds focus instead of the render widget.
+    "auto" picks message for browser windows, scancode otherwise."""
+    if key_method == "scancode":
+        return None, "scancode", None
+    win = None
+    if focus:
+        hits = winfind.find_windows(focus)
+        win = hits[0] if hits else None
+    if win is None:
+        win = next((w for w in winfind.list_windows() if w["foreground"]), None)
+    if win is None:
+        return None, "scancode", None
+    want_msg = key_method == "message" or (key_method == "auto" and winfind.is_browser(win.get("process")))
+    if want_msg:
+        return winfind.keyboard_targets(win["hwnd"]), "message", win["title"]
+    return None, "scancode", win["title"]
 
 
 @mcp.tool()
 async def act(actions: list[dict], coordinate_space: str = "image",
               capture_id: int | None = None, screenshot: bool | str = True,
-              settle_ms: int = 80, focus: str | None = None, ctx: Context = None) -> list:
+              settle_ms: int = 80, focus: str | None = None,
+              key_method: str = "auto", ctx: Context = None) -> list:
     """Perform input actions in order. Items: {"action": <name>, ...} with native names —
     left_click/right_click/double_click/mouse_move {x,y}, left_mouse_down/up, scroll
     {scroll_direction,scroll_amount}, drag {x,y,to:{x,y},path?}, key {text:"ctrl+s"},
     hold_key {text,duration}, type {text}, paste {text}, mouse_move_relative {dx,dy},
     click_element {query,role?,nth?,window?}, wait {duration}. Coords ([x,y] or {x,y}) are in
-    the last screenshot's image space. KEYBOARD INPUT goes to the FOREGROUND window — pass
-    focus="<window>" to bring your target front first (atomic); otherwise the result reports
-    which window actually received it. Batch related steps to save round-trips; for timed game
-    input use `play`; to click a labeled control without vision use a click_element action.
-    screenshot: true|false|"text" (UIA text); auto-suppressed after pure motion/scroll/wait."""
+    the last screenshot's image space. Pass focus="<window>" to target a specific window first.
+    key_method routes keyboard input: "auto" (default) sends scan codes to native apps/games but
+    auto-switches to window-messages for BROWSER windows (the only thing that reaches a web/canvas/
+    Flash game like coolmathgames — left_click the canvas once first to give it focus); force with
+    "message" or "scancode".
+    Batch related steps to save round-trips; for timed game input use `play`; to click a labeled
+    control without vision use click_element. screenshot: true|false|"text" (UIA text)."""
     if focus:
         fr = windows_tool.focus(focus)
         if fr.get("error"):
             return [_text(f"focus({focus!r}) failed: {fr['error']}. Run `window list` for exact titles.")]
         time.sleep(0.18)
+    # Keyboard routing is resolved LAZILY at the first key action — a click earlier in the same
+    # batch (to focus a game canvas) changes the foreground window, and the route must reflect that.
+    kbr = {"done": False, "targets": None, "via": "scancode", "title": None}
+
+    def _kb():
+        if not kbr["done"]:
+            t, v, ti = _resolve_keyboard(focus, (key_method or "auto").lower())
+            kbr.update(done=True, targets=t, via=v, title=ti)
+        return kbr
+
+    def _keys_follow(i):
+        return any((b.get("action") or b.get("type") or "").lower() in _KEYBOARD_ACTIONS
+                   for b in actions[i + 1:])
+
     log = []
     try:
-        for a in actions:
-            log.append(_dispatch(a, coordinate_space, capture_id))
+        for i, a in enumerate(actions):
+            name = (a.get("action") or a.get("type") or "").lower()
+            if name in _KEYBOARD_ACTIONS:
+                k = _kb()
+                log.append(_dispatch(a, coordinate_space, capture_id, k["targets"], k["via"]))
+            else:
+                log.append(_dispatch(a, coordinate_space, capture_id))
+                # settle after a click that precedes keys, so its DOM/canvas focus registers first
+                if name in _POINTER_ACTIONS and _keys_follow(i):
+                    time.sleep(0.2)
     except coords.CaptureMismatch as e:
         return [_text(f"ABORTED (stale frame): {e}\nExecuted before abort:\n" + "\n".join(log))]
     except Exception as e:  # noqa: BLE001
@@ -232,15 +295,17 @@ async def act(actions: list[dict], coordinate_space: str = "image",
 
     note = None
     if any((a.get("action") or a.get("type") or "").lower() in _KEYBOARD_ACTIONS for a in actions):
-        fg_win = next((w for w in winfind.list_windows() if w["foreground"]), None)
-        fg = fg_win["title"] if fg_win else "(unknown)"
-        note = (f"focused & sent input to '{fg}'." if focus
-                else f"keyboard input went to foreground '{fg}'. If that's not your target, pass focus=\"<title>\".")
-        proc = (fg_win["process"] if fg_win else "").lower()
-        if any(b in proc for b in ("chrome", "msedge", "firefox", "brave", "opera", "vivaldi")):
-            note += (" Browser: if keys don't register in a canvas/Flash/HTML5 game, left_click the game"
-                     " canvas in THIS SAME batch right before the key (do not screenshot between the click"
-                     " and key) — the on-screen score/Moves is ground truth.")
+        kb_via, kb_title = kbr["via"], kbr["title"]
+        if kb_via == "message":
+            note = (f"keyboard posted to '{kb_title}' (browser render-widget; no focus theft). A web/"
+                    "canvas/Flash game must have CANVAS focus to receive keys: left_click the game canvas"
+                    " once (this batch or a prior call) — focus then persists until you click elsewhere."
+                    " On-screen score/Moves is ground truth.")
+        else:
+            fg_win = next((w for w in winfind.list_windows() if w["foreground"]), None)
+            fg = fg_win["title"] if fg_win else "(unknown)"
+            note = (f"focused & sent input to '{fg}'." if focus
+                    else f"keyboard input went to foreground '{fg}'. If that's not your target, pass focus=\"<title>\".")
 
     last = (actions[-1].get("action") or actions[-1].get("type") or "").lower() if actions else ""
     want_text = screenshot == "text"
@@ -308,16 +373,25 @@ async def play(script: str, target: str | None = None, fps: int = 10,
     look <dx> <dy> (relative) | move <x> <y> (absolute image) | lmb|rmb|mmb [x y] |
     scroll <up|down|left|right> <amt> | type <text> | paste <text> | wait <sec> | probe |
     until <expr> | shot. With `probe` set (a shell command emitting JSON), `probe`/`until`
-    read telemetry per sample and stop early (e.g. 'until dist < 1000') — the KSP loop."""
+    read telemetry per sample and stop early (e.g. 'until dist < 1000') — the KSP loop.
+    If `target` is a browser window, keys auto-route to the page render-widget so canvas/Flash
+    games (e.g. coolmathgames) receive them; mouse stays absolute."""
     try:
         spec = targets.resolve(target or "foreground")
     except Exception:
         spec = targets.resolve("desktop")
+    kb_targets = None
     if spec["kind"] == "window":
         winfind.foreground(spec["hwnd"])
         time.sleep(0.2)
+        # Browser windows: route keys to the page render-widget child so canvas/Flash games
+        # actually receive them (SendInput keys miss — the frame, not the widget, holds focus).
+        win = next((w for w in winfind.list_windows() if w["hwnd"] == spec["hwnd"]), None)
+        if win and winfind.is_browser(win.get("process")):
+            kb_targets = winfind.keyboard_targets(spec["hwnd"])
     grab = video.grab_fn_for_spec(spec, foreground=True)
-    result = playscript.run(script, grab, fps, probe_cmd=probe, coordinate_space=coordinate_space)
+    result = playscript.run(script, grab, fps, probe_cmd=probe,
+                            coordinate_space=coordinate_space, kb_targets=kb_targets)
     frames = result["frames"]
     montage, warn = video.make_montage(frames, montage_frames)
     outdir = await artifacts.resolve_output_dir(ctx)

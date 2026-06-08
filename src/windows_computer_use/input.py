@@ -60,6 +60,10 @@ user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
 user32.MapVirtualKeyW.restype = wintypes.UINT
 user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 user32.SetCursorPos.restype = wintypes.BOOL
+user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.PostMessageW.restype = wintypes.BOOL
+
+WM_KEYDOWN, WM_KEYUP, WM_CHAR = 0x0100, 0x0101, 0x0102
 
 
 def _send(*events: INPUT) -> None:
@@ -169,6 +173,91 @@ def _utf16_units(ch: str) -> list[int]:
         return [code]
     code -= 0x10000  # surrogate pair
     return [0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF)]
+
+
+# --- message-mode keyboard (PostMessage to a window's queue; no foreground/focus needed) ----
+# Drives browser/web/canvas content via the page render-widget child window, where SendInput
+# keys silently miss because the top-level frame — not the render widget — holds keyboard focus.
+# Target HWND(s) come from winfind.keyboard_targets(). Plain keys (arrows/WASD/letters) are
+# reliable; browser modifier shortcuts (ctrl+…) may not register because posted messages don't
+# update the global key-state table — use scancode mode (SendInput) for those.
+def _key_lparam(vk: int, keyup: bool, repeat: bool = False) -> int:
+    scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) & 0xFF
+    lp = 1 | (scan << 16)                # repeat count 1 + scan code
+    if vk in keymap.EXTENDED_VKS:
+        lp |= 1 << 24                    # extended-key flag (arrows, nav cluster)
+    if keyup:
+        lp |= (1 << 30) | (1 << 31)      # previous-state down + transition up
+    elif repeat:
+        lp |= 1 << 30                    # auto-repeat: previous state was down
+    return lp
+
+
+def _post(hwnds, msg: int, wparam: int, lparam: int) -> None:
+    for h in hwnds:
+        user32.PostMessageW(wintypes.HWND(int(h)), msg, wparam, lparam)
+
+
+def post_tap(hwnds, name: str, presses: int = 1, interval: float = 0.0, hold: float = 0.0) -> None:
+    vk = keymap.resolve_vk(name)
+    for i in range(presses):
+        _post(hwnds, WM_KEYDOWN, vk, _key_lparam(vk, False))
+        if hold:
+            time.sleep(hold)
+        _post(hwnds, WM_KEYUP, vk, _key_lparam(vk, True))
+        if interval and i < presses - 1:
+            time.sleep(interval)
+
+
+def post_key_down(hwnds, name: str) -> None:
+    vk = keymap.resolve_vk(name)
+    _post(hwnds, WM_KEYDOWN, vk, _key_lparam(vk, False))
+
+
+def post_key_up(hwnds, name: str) -> None:
+    vk = keymap.resolve_vk(name)
+    _post(hwnds, WM_KEYUP, vk, _key_lparam(vk, True))
+
+
+def post_combo(hwnds, combo: str, hold: float = 0.0) -> None:
+    """Post a chord: downs in order, ups reversed (see module note on modifier limits)."""
+    vks = keymap.parse_combo(combo)
+    for vk in vks:
+        _post(hwnds, WM_KEYDOWN, vk, _key_lparam(vk, False))
+    if hold:
+        time.sleep(hold)
+    for vk in reversed(vks):
+        _post(hwnds, WM_KEYUP, vk, _key_lparam(vk, True))
+
+
+def post_hold(hwnds, combo: str, duration: float) -> None:
+    """Hold a key/chord for `duration`, re-posting WM_KEYDOWN at the typematic rate so games
+    that read auto-repeat keep moving while held."""
+    vks = keymap.parse_combo(combo)
+    for vk in vks:
+        _post(hwnds, WM_KEYDOWN, vk, _key_lparam(vk, False))
+    elapsed = 0.0
+    try:
+        while elapsed < duration:
+            time.sleep(min(0.03, max(0.0, duration - elapsed)))
+            elapsed += 0.03
+            for vk in vks:
+                _post(hwnds, WM_KEYDOWN, vk, _key_lparam(vk, False, repeat=True))
+    finally:
+        for vk in reversed(vks):
+            _post(hwnds, WM_KEYUP, vk, _key_lparam(vk, True))
+
+
+def post_text(hwnds, text: str, literal: bool = False) -> None:
+    """Type text into a window via WM_CHAR (no foreground). ``\\n``->Enter, ``\\t``->Tab unless literal."""
+    for ch in text:
+        if not literal and ch == "\n":
+            post_tap(hwnds, "enter")
+        elif not literal and ch == "\t":
+            post_tap(hwnds, "tab")
+        else:
+            for unit in _utf16_units(ch):
+                _post(hwnds, WM_CHAR, unit, 1)
 
 
 # --- public mouse API -----------------------------------------------------

@@ -184,3 +184,40 @@ def foreground(hwnd: int) -> bool:
     if not ok:
         print(f"[wcu] warning: SetForegroundWindow failed for hwnd {int(hwnd.value)}", file=sys.stderr)
     return ok
+
+
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.restype = ctypes.c_int
+
+# Chromium-family browsers render page content in Chrome_RenderWidgetHostHWND child windows
+# that accept *posted* WM_KEYDOWN/WM_CHAR even when the top-level frame (not the render widget)
+# holds keyboard focus — which is exactly why SendInput keys silently miss a web/canvas game.
+BROWSER_PROCS = ("chrome", "msedge", "brave", "opera", "vivaldi", "chromium", "thorium")
+
+
+def is_browser(process: str | None) -> bool:
+    return any(b in (process or "").lower() for b in BROWSER_PROCS)
+
+
+def child_windows(hwnd: int) -> list[tuple[int, str]]:
+    """All descendant windows of `hwnd` as (child_hwnd, class_name)."""
+    out: list[tuple[int, str]] = []
+
+    def _cb(child, _lparam):
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(child, buf, 256)
+        out.append((int(child), buf.value))
+        return True
+
+    user32.EnumChildWindows(wintypes.HWND(int(hwnd)), _WNDENUMPROC(_cb), 0)
+    return out
+
+
+def keyboard_targets(hwnd: int) -> list[int]:
+    """HWND(s) to PostMessage keys to so they reach page content. For Chromium browsers the
+    page lives in Chrome_RenderWidgetHostHWND children that receive WM_KEYDOWN/WM_CHAR without
+    the top-level frame holding focus; posting to them drives web/canvas games where SendInput
+    cannot. Returns every render-widget child (post to all — a key only acts on the widget whose
+    document handles it), else the window itself."""
+    rw = [h for h, cls in child_windows(hwnd) if "RenderWidget" in cls]
+    return rw or [int(hwnd)]

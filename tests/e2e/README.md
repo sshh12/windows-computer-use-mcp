@@ -22,3 +22,12 @@ tests\e2e\run-plugin.cmd "what monitors are connected and what's on each?"
 
 The agent's transcript shows which tools it picked and any just-in-time feedback the tools returned —
 the signal we use to refine tool descriptions and arguments.
+
+Both runners (`run-mcp.cmd` / `run-plugin.cmd`) append two standing rules to **every** task, so the
+signal is consistent no matter what the test does:
+- **Bail-early + diagnose** — if a core interaction is clearly broken after 2-3 attempts, stop and
+  report the failing call + hypothesis + the fix, rather than flailing.
+- **Always give toolset feedback** — regardless of success or failure, the agent ends with a
+  `Toolset feedback:` section: avoidable round-trips/screenshots, confusing or missing args/return
+  fields, token/attempt costs, and one concrete fix per problem. This is what we mine to improve the
+  toolset, so it runs on passing tests too — not just the ones that break.

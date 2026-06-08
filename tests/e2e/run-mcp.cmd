@@ -13,6 +13,9 @@ if "%TASK%"=="" (
 rem Append a standing "bail early + diagnose" rule so tool-evaluation runs stop flailing.
 set "TASK=%TASK%  [E2E HARNESS RULE: this is a tool-evaluation run. If after at most 2-3 attempts a core interaction is clearly not working or you are not making real progress (an action reports ok but the screen does not change, repeated no-ops, or the same retry twice), STOP IMMEDIATELY and do not try more variations. Report concisely: the exact tool call that failed, what you observed, your best hypothesis why, and what tool change would fix it. Bailing early with a crisp diagnosis is the success condition.]"
 
+rem ALWAYS solicit toolset-efficiency feedback, no matter the task or whether the run succeeded or bailed.
+set "TASK=%TASK%  [E2E FEEDBACK RULE (ALWAYS, regardless of outcome): when you finish - whether you fully succeeded, partially succeeded, or bailed - end your reply with a 'Toolset feedback:' section. Give detailed, specific notes on what could have been better or more efficient about these MCP tools: round-trips or screenshots you could have avoided, confusing or missing arguments or return fields, anything that cost extra tokens or attempts, and one concrete fix for each problem. Cite the exact tool and call. Only write 'no issues' if you genuinely hit none.]"
+
 rem Clear the nested-session guard so `claude -p` can run inside an existing Claude session.
 set "CLAUDECODE="
 set "CLAUDE_CODE_ENTRYPOINT="

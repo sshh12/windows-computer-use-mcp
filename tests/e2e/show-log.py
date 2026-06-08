@@ -3,8 +3,8 @@
 Usage:  python tests/e2e/show-log.py <path-to-.output>
 Shows agent text, each tool call + its input, and tool-result text (image blobs elided).
 """
-import sys
 import json
+import sys
 
 for s in (sys.stdout, sys.stderr):
     try:

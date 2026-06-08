@@ -39,8 +39,15 @@ def _keys(s: str) -> str:
 
 
 def run(script: str, grab, fps: int, probe_cmd: str | None = None,
-        coordinate_space: str = "image", max_seconds: float = 180.0):
-    """Execute the script. Returns dict {frames, samples, log, stopped_by}."""
+        coordinate_space: str = "image", max_seconds: float = 180.0,
+        kb_targets: list[int] | None = None):
+    """Execute the script. Returns dict {frames, samples, log, stopped_by}.
+
+    If ``kb_targets`` is given (HWNDs from winfind.keyboard_targets), keyboard ops are injected
+    via window-messages instead of SendInput — required to drive a browser web/canvas game,
+    where SendInput keys miss because the page render-widget child (not the top-level frame)
+    holds focus. Mouse ops always use SendInput (absolute positioning)."""
+    msg = bool(kb_targets)
     cmds = parse(script)
     frames: list[tuple[float, object]] = []
     samples: list[dict] = []
@@ -94,19 +101,22 @@ def run(script: str, grab, fps: int, probe_cmd: str | None = None,
             try:
                 if op == "hold":
                     parts = rest.split()
-                    winput.hold(parts[0], float(parts[1]))
+                    winput.post_hold(kb_targets, parts[0], float(parts[1])) if msg else winput.hold(parts[0], float(parts[1]))
                 elif op == "tap":
                     parts = rest.split()
                     count = int(parts[1]) if len(parts) > 1 else 1
-                    for _ in range(count):
-                        winput.press(parts[0])
+                    if msg:
+                        winput.post_tap(kb_targets, parts[0], presses=count, interval=0.02, hold=0.03)
+                    else:
+                        for _ in range(count):
+                            winput.press(parts[0])
                 elif op == "down":
                     k = _keys(rest)
-                    winput.key_down(k)
+                    winput.post_key_down(kb_targets, k) if msg else winput.key_down(k)
                     held_keys.append(k)
                 elif op == "up":
                     k = _keys(rest)
-                    winput.key_up(k)
+                    winput.post_key_up(kb_targets, k) if msg else winput.key_up(k)
                     if k in held_keys:
                         held_keys.remove(k)
                 elif op == "look":
@@ -131,7 +141,7 @@ def run(script: str, grab, fps: int, probe_cmd: str | None = None,
                     signed = amount if direction in ("up", "right") else -amount
                     winput.scroll(signed, horizontal=horiz)
                 elif op == "type":
-                    winput.type_text(rest)
+                    winput.post_text(kb_targets, rest) if msg else winput.type_text(rest)
                 elif op == "paste":
                     from . import clipboard
                     clipboard.set_text(rest)
@@ -163,7 +173,7 @@ def run(script: str, grab, fps: int, probe_cmd: str | None = None,
         ct.join(timeout=1.5)
         for k in list(held_keys):
             try:
-                winput.key_up(k)
+                winput.post_key_up(kb_targets, k) if msg else winput.key_up(k)
             except Exception:
                 pass
         for b in list(held_btns):
