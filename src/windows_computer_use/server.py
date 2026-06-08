@@ -5,6 +5,7 @@ return content blocks (text + inline downscaled image); large artifacts (video, 
 big text) are written to an MCP root and returned as a path / resource_link.
 """
 import base64
+import sys
 import time
 
 from mcp import types
@@ -412,8 +413,12 @@ async def record(target: str = "desktop", seconds: float = 5.0, fps: int = 10,
     outdir = await artifacts.resolve_output_dir(ctx)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     mp4 = outdir / f"record_{stamp}.mp4"
+    t_enc = time.perf_counter()
     ok, msg = video.write_mp4(frames, fps, mp4)
-    lines = [f"{spec['label']} · {len(frames)} frames · requested {fps}fps, achieved {achieved:.1f}fps",
+    enc_s = time.perf_counter() - t_enc
+    print(f"[wcu] record: {len(frames)} frames · encode {enc_s:.2f}s", file=sys.stderr)
+    lines = [f"{spec['label']} · {len(frames)} frames · requested {fps}fps, achieved "
+             f"{achieved:.1f}fps · encode {enc_s:.1f}s",
              f"mp4: {mp4}" if ok else f"mp4: FAILED ({msg})"]
     if warn:
         lines.append(f"⚠ {warn}")
@@ -460,15 +465,22 @@ async def play(script: str, target: str | None = None, fps: int = 10,
         if winfind.is_browser(proc):
             kb_targets = winfind.keyboard_targets(spec["hwnd"])
     grab = video.grab_fn_for_spec(spec, foreground=True)
+    t_run = time.perf_counter()
     result = playscript.run(script, grab, fps, probe_cmd=probe,
                             coordinate_space=coordinate_space, kb_targets=kb_targets)
+    run_s = time.perf_counter() - t_run
     frames = result["frames"]
     montage, warn = video.make_montage(frames, montage_frames)
     outdir = await artifacts.resolve_output_dir(ctx)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     mp4 = outdir / f"play_{stamp}.mp4"
+    t_enc = time.perf_counter()
     ok, msg = video.write_mp4(frames, fps, mp4)
-    lines = [f"{spec['label']} · {len(frames)} frames · stopped_by: {result['stopped_by']}",
+    enc_s = time.perf_counter() - t_enc
+    print(f"[wcu] play: {len(frames)} frames · script+capture {run_s:.2f}s · encode {enc_s:.2f}s",
+          file=sys.stderr)
+    lines = [f"{spec['label']} · {len(frames)} frames · stopped_by: {result['stopped_by']} "
+             f"· script+capture {run_s:.1f}s · encode {enc_s:.1f}s",
              f"mp4: {mp4}" if ok else f"mp4: FAILED ({msg})"]
     if result["samples"]:
         lines.append("probe samples: " + "; ".join(str(s) for s in result["samples"][-6:]))

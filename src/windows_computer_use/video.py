@@ -4,7 +4,6 @@ The agent gets a single timestamped **contact-sheet montage** to reason over (ch
 plus an mp4 written to disk for the human. A "frames identical" liveness check warns when
 the target wasn't actually rendering (a classic background-window / stale-frame failure).
 """
-import os
 import shutil
 import subprocess
 import sys
@@ -98,27 +97,46 @@ def make_montage(frames: list, montage_frames: int = 6):
 
 
 def write_mp4(frames: list, fps: int, out_path) -> tuple[bool, str]:
-    """Encode frames to an H.264 mp4. Returns (ok, message)."""
+    """Encode frames to an H.264 mp4 by piping RAW RGB straight into ffmpeg.
+
+    The old path saved every frame as a compressed PNG first, which dominated runtime
+    (~180ms/frame for a 2-megapixel 3D render — minutes for a long clip). Feeding ffmpeg
+    raw rgb24 over stdin skips per-frame compression entirely (~10x faster). All frames are
+    normalised to the first frame's even dimensions (yuv420p needs even W/H).
+    """
     fp = ffmpeg_path()
     if not fp:
         return False, "ffmpeg not found on PATH (frames captured but no mp4)"
     if not frames:
         return False, "no frames to encode"
-    tmp = tempfile.mkdtemp(prefix="wcu_frames_")
+    first = frames[0][1].convert("RGB")
+    w, h = first.size
+    ow, oh = w - (w % 2), h - (h % 2)  # even dims for yuv420p
+    cmd = [
+        fp, "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{ow}x{oh}",
+        "-framerate", str(fps), "-i", "pipe:0",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-loglevel", "error", str(out_path),
+    ]
+    # stderr -> temp file (not a pipe) so a chatty ffmpeg can't dead-lock our stdin writes.
+    errf = tempfile.TemporaryFile()
     try:
-        for i, (_t, img) in enumerate(frames):
-            img.convert("RGB").save(os.path.join(tmp, f"f{i:05d}.png"))
-        cmd = [
-            fp, "-y", "-framerate", str(fps),
-            "-i", os.path.join(tmp, "f%05d.png"),
-            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-loglevel", "error",
-            str(out_path),
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if r.returncode != 0:
-            return False, f"ffmpeg failed: {r.stderr.strip()[:300]}"
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=errf, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        assert proc.stdin is not None  # stdin=PIPE guarantees this
+        try:
+            for _t, img in frames:
+                im = img.convert("RGB")
+                if im.size != (ow, oh):
+                    im = im.resize((ow, oh))
+                proc.stdin.write(im.tobytes())
+            proc.stdin.close()
+            rc = proc.wait()
+        except Exception as e:  # noqa: BLE001
+            proc.kill()
+            return False, f"ffmpeg pipe failed: {e}"
+        if rc != 0:
+            errf.seek(0)
+            return False, f"ffmpeg failed: {errf.read().decode('utf-8', 'replace').strip()[:300]}"
         return True, "ok"
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        errf.close()
